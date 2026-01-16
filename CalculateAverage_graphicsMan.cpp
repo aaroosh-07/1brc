@@ -489,17 +489,13 @@ inline ParseResult parseNext(const char* p) {
         _mm256_set1_epi8(static_cast<int8_t>(semiPos)), kIndices32);
     maskedKey = _mm256_and_si256(chunk, keyMask);
   } else {
-    // Fallback: search for semicolon sequentially
-    const char* semi = p + 1;
+    // Fallback: semicolon not in first 32 bytes, start searching from p+32
+    const char* semi = p + 32;
     while (*semi != ';') ++semi;
     semiPos = static_cast<int>(semi - p);
 
-    // For fallback, load and mask the key
-    if (semiPos <= 31) {
-      maskedKey = loadMasked32(p, semiPos);
-    } else {
-      maskedKey = zeroKey32();  // Will use stationPtr instead
-    }
+    // Key is >31 bytes, will use stationPtr instead
+    maskedKey = zeroKey32();
   }
 
   const char* temp = p + semiPos + 1;
@@ -545,8 +541,8 @@ inline ParseResult parseNext(const char* p) {
     // Semicolon in first 16 bytes
     semiPos = findChar(chunk, kSemicolonPattern);
   } else {
-    // Fallback: sequential search for semicolon
-    const char* semi = p + 1;
+    // Fallback: semicolon not in first 16 bytes, start searching from p+16
+    const char* semi = p + 16;
     while (*semi != ';') ++semi;
     semiPos = static_cast<int>(semi - p);
   }
