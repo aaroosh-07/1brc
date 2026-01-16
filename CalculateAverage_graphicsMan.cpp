@@ -224,7 +224,6 @@ struct ResultRow {
 #if defined(USE_AVX2)
 // AVX2: Use __m256i for 32-byte keys
 using Key32 = __m256i;
-static constexpr size_t kKey32Align = 32;
 
 static const __m256i kIndices32 = _mm256_setr_epi8(
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
@@ -271,7 +270,6 @@ FORCE_INLINE const char* keyData32(const Key32* key) {
 #elif defined(USE_NEON)
 // NEON: Use uint8x16x2_t for 32-byte keys (two 16-byte vectors)
 using Key32 = uint8x16x2_t;
-static constexpr size_t kKey32Align = 16;
 
 FORCE_INLINE Key32 loadMasked32(const char* data, size_t len) {
   uint8x16_t lo = vld1q_u8(reinterpret_cast<const uint8_t*>(data));
@@ -326,7 +324,6 @@ struct Key32 {
     uint8_t u8[32];
   };
 };
-static constexpr size_t kKey32Align = 8;
 
 FORCE_INLINE Key32 loadMasked32(const char* data, size_t len) {
   Key32 result{};
