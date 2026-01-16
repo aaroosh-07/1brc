@@ -20,6 +20,7 @@
 #include <barrier>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <limits>
@@ -907,13 +908,19 @@ void processChunk(const char* roughStart, const char* roughEnd,
   maps.consolidate();
 }
 
-int main() {
+int main(int argc, char* argv[]) {
   using Clock = std::chrono::high_resolution_clock;
   auto totalStart = Clock::now();
 
-  // Get number of threads
-  unsigned int numThreads = std::thread::hardware_concurrency() - 1;
-  if (numThreads == 0) numThreads = 1;
+  // Get number of threads (from command line or default to hardware_concurrency - 1)
+  uint32_t numThreads;
+  if (argc > 1) {
+    numThreads = static_cast<uint32_t>(std::atoi(argv[1]));
+    if (numThreads == 0) numThreads = 1;
+  } else {
+    numThreads = std::thread::hardware_concurrency() - 1;
+    if (numThreads == 0) numThreads = 1;
+  }
 
 #if defined(DEBUG_PRINT)
   std::print("Using {} threads\n", numThreads);
@@ -941,8 +948,8 @@ int main() {
   const char* fileEnd = mmap.data() + mmap.size();
 
   // Calculate number of merge rounds: ceil(log2(numThreads))
-  unsigned int mergeRounds = 0;
-  for (unsigned int n = numThreads; n > 1; n = (n + 1) / 2) {
+  uint32_t mergeRounds = 0;
+  for (uint32_t n = numThreads; n > 1; n = (n + 1) / 2) {
     ++mergeRounds;
   }
 
@@ -951,7 +958,7 @@ int main() {
   // - roundComplete[r]: signals all threads have finished round r
   std::deque<std::barrier<>> barriers;
   barriers.emplace_back(numThreads);  // parseComplete
-  for (unsigned int r = 0; r < mergeRounds; ++r) {
+  for (uint32_t r = 0; r < mergeRounds; ++r) {
     barriers.emplace_back(numThreads);  // roundComplete[r]
   }
 
@@ -964,7 +971,7 @@ int main() {
   // Spawn worker threads - each thread creates its own Maps and participates in merge
   std::vector<std::thread> threads;
   threads.reserve(numThreads - 1);
-  for (unsigned int i = 1; i < numThreads; ++i) {
+  for (uint32_t i = 1; i < numThreads; ++i) {
     const char* chunkStart = mmap.data() + (i * chunkSize);
     const char* chunkEnd = (i == numThreads - 1) ? fileEnd : (mmap.data() + ((i + 1) * chunkSize));
 
@@ -977,9 +984,9 @@ int main() {
       barriers[0].arrive_and_wait();
 
       // Participate in log(n) merge rounds
-      for (unsigned int r = 0; r < mergeRounds; ++r) {
-        unsigned int step = 1u << r;  // 1, 2, 4, 8, ...
-        unsigned int stride = step * 2;  // 2, 4, 8, 16, ...
+      for (uint32_t r = 0; r < mergeRounds; ++r) {
+        uint32_t step = 1u << r;  // 1, 2, 4, 8, ...
+        uint32_t stride = step * 2;  // 2, 4, 8, 16, ...
 
         // Thread i merges from thread (i + step) if:
         // - i is divisible by stride
@@ -1010,8 +1017,8 @@ int main() {
   auto mergeStart = Clock::now();
 
   // Main thread participates in merge rounds
-  for (unsigned int r = 0; r < mergeRounds; ++r) {
-    unsigned int step = 1u << r;  // 1, 2, 4, 8, ...
+  for (uint32_t r = 0; r < mergeRounds; ++r) {
+    uint32_t step = 1u << r;  // 1, 2, 4, 8, ...
 
     // Thread 0 merges from thread step if step < numThreads
     if (step < numThreads) {
@@ -1069,7 +1076,7 @@ int main() {
 #if defined(DEBUG_PRINT)
   std::print("\n");
 #endif
-  std::print(stderr, "=== Timing Breakdown ===\n");
+  std::print(stderr, "=== Timing Breakdown ({} threads) ===\n", numThreads);
   std::print(stderr, "  mmap:   {:8.3f} ms\n", toMs(mmapEnd - mmapStart));
   std::print(stderr, "  parse:  {:8.3f} ms\n", toMs(parseEnd - parseStart));
   std::print(stderr, "  merge:  {:8.3f} ms\n", toMs(mergeEnd - mergeStart));

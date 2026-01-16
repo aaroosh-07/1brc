@@ -11,10 +11,10 @@ The output is a sorted list of stations with their min/mean/max temperatures.
 
 ## Performance Results
 
-Benchmarks on AMD Ryzen Threadripper PRO 7995WX (96 cores, 192 threads with SMT):
+### AMD Ryzen Threadripper PRO 7995WX (96 cores, 192 threads with SMT)
 
-| Configuration | Computation Wall Time | Speedup | Process Wall Time | Speedup |
-|---------------|----------------------|---------|-------------------|---------|
+| Configuration | Computation Time | Speedup | Process Wall Time | Speedup |
+|---------------|------------------|---------|-------------------|---------|
 | Java baseline | ~116s | 1x | ~116s | 1x |
 | C++ (1 thread) | 7,965 ms | 15x | 8.5s | 14x |
 | C++ (12 threads) | 682 ms | 170x | 1.18s | 98x |
@@ -23,6 +23,18 @@ Benchmarks on AMD Ryzen Threadripper PRO 7995WX (96 cores, 192 threads with SMT)
 | C++ (191 threads) | 127 ms | 913x | 0.65s | 178x |
 
 Using 191 threads (one less than hardware_concurrency) is slightly faster than 192, as it leaves one hyperthread available for the OS and other processes.
+
+### Apple M4 Pro (8 performance + 4 efficiency cores)
+
+| Configuration | Computation Time | Speedup | Process Wall Time | Speedup |
+|---------------|------------------|---------|-------------------|---------|
+| C++ (1 thread) | 11,182 ms | 1x | 11.24s | 1x |
+| C++ (2 threads) | 5,839 ms | 1.9x | 5.89s | 1.9x |
+| C++ (4 threads) | 3,104 ms | 3.6x | 3.16s | 3.6x |
+| C++ (8 threads) | 1,652 ms | 6.8x | 1.71s | 6.6x |
+| C++ (12 threads) | 1,414 ms | 7.9x | 1.47s | 7.6x |
+
+The M4 Pro shows excellent scaling up to 8 threads (the performance cores). Adding efficiency cores provides modest additional speedup, with 12 threads being ~15% faster than 8 threads.
 
 The gap between computation wall time and process wall time (especially at high thread counts) is due to kernel cleanup overhead for memory-mapped pages - this ~500ms overhead appears to be unavoidable.
 
