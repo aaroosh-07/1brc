@@ -14,6 +14,6 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
-
-JAVA_OPTS=""
-java $JAVA_OPTS --class-path target/average-1.0.0-SNAPSHOT.jar dev.morling.onebrc.CalculateAverage_hundredwatt
+c++ -g -std=c++23 -O3 -march=native -Wall -Werror CalculateAverage_graphicsMan.cpp -o /tmp/calculate_average
+echo "Compiled /tmp/calculate_average"
+time /tmp/calculate_average
