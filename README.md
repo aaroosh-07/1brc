@@ -28,11 +28,12 @@ Using 191 threads (one less than hardware_concurrency) is slightly faster than 1
 
 | Configuration | Computation Time | Speedup | Process Wall Time | Speedup |
 |---------------|------------------|---------|-------------------|---------|
-| C++ (1 thread) | 11,182 ms | 1x | 11.24s | 1x |
-| C++ (2 threads) | 5,839 ms | 1.9x | 5.89s | 1.9x |
-| C++ (4 threads) | 3,104 ms | 3.6x | 3.16s | 3.6x |
-| C++ (8 threads) | 1,652 ms | 6.8x | 1.71s | 6.6x |
-| C++ (12 threads) | 1,414 ms | 7.9x | 1.47s | 7.6x |
+| Java baseline | ~144s | 1x | ~144s | 1x |
+| C++ (1 thread) | 8,634 ms | 17x | 8.7s | 17x |
+| C++ (2 threads) | 4,444 ms | 32x | 4.5s | 32x |
+| C++ (4 threads) | 2,469 ms | 58x | 2.5s | 58x |
+| C++ (8 threads) | 1,346 ms | 107x | 1.4s | 103x |
+| C++ (12 threads) | 1,151 ms | 125x | 1.2s | 120x |
 
 The M4 Pro shows excellent scaling up to 8 threads (the performance cores). Adding efficiency cores provides modest additional speedup, with 12 threads being ~15% faster than 8 threads.
 
