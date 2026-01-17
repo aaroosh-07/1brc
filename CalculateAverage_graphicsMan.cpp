@@ -20,6 +20,7 @@
 #include <barrier>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <limits>
@@ -224,7 +225,6 @@ struct ResultRow {
 #if defined(USE_AVX2)
 // AVX2: Use __m256i for 32-byte keys
 using Key32 = __m256i;
-static constexpr size_t kKey32Align = 32;
 
 static const __m256i kIndices32 = _mm256_setr_epi8(
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
@@ -271,7 +271,6 @@ FORCE_INLINE const char* keyData32(const Key32* key) {
 #elif defined(USE_NEON)
 // NEON: Use uint8x16x2_t for 32-byte keys (two 16-byte vectors)
 using Key32 = uint8x16x2_t;
-static constexpr size_t kKey32Align = 16;
 
 FORCE_INLINE Key32 loadMasked32(const char* data, size_t len) {
   uint8x16_t lo = vld1q_u8(reinterpret_cast<const uint8_t*>(data));
@@ -326,7 +325,6 @@ struct Key32 {
     uint8_t u8[32];
   };
 };
-static constexpr size_t kKey32Align = 8;
 
 FORCE_INLINE Key32 loadMasked32(const char* data, size_t len) {
   Key32 result{};
@@ -508,74 +506,64 @@ inline ParseResult parseNext(const char* p) {
 }
 #elif defined(USE_NEON)
 inline ParseResult parseNext(const char* p) {
-  // Lambda to find character position using SWAR on 16-byte NEON register
-  auto findChar = [](uint8x16_t chunk, uint64_t targetPattern) -> int {
-    uint64_t chunkLo = vgetq_lane_u64(vreinterpretq_u64_u8(chunk), 0);
-    uint64_t chunkHi = vgetq_lane_u64(vreinterpretq_u64_u8(chunk), 1);
+  // Load 32 bytes upfront (two 16-byte vectors) - covers ~99% of lines
+  uint8x16_t chunk0 = vld1q_u8(reinterpret_cast<const uint8_t*>(p));
+  uint8x16_t chunk1 = vld1q_u8(reinterpret_cast<const uint8_t*>(p + 16));
 
-    uint64_t xorLo = chunkLo ^ targetPattern;
-    uint64_t hasLo = (xorLo - kSwarLow) & ~xorLo & kSwarHigh;
-
-    if (hasLo) {
-      return __builtin_ctzll(hasLo) >> 3;
-    }
-
-    uint64_t xorHi = chunkHi ^ targetPattern;
-    uint64_t hasHi = (xorHi - kSwarLow) & ~xorHi & kSwarHigh;
-    return 8 + (__builtin_ctzll(hasHi) >> 3);
-  };
-
-  // Load 16 bytes first (covers 60% of cases)
-  uint8x16_t chunk = vld1q_u8(reinterpret_cast<const uint8_t*>(p));
-
-  // Find semicolon and newline
+  // Find semicolon in both chunks using NEON compare
   uint8x16_t vsemi = vdupq_n_u8(';');
-  uint8x16_t vnewline = vdupq_n_u8('\n');
-  uint8x16_t cmpSemi = vceqq_u8(chunk, vsemi);
-  uint8x16_t cmpNewline = vceqq_u8(chunk, vnewline);
+  uint8x16_t cmpSemi0 = vceqq_u8(chunk0, vsemi);
+  uint8x16_t cmpSemi1 = vceqq_u8(chunk1, vsemi);
+
+  // Convert comparison results to bitmasks using narrow + extract
+  // vshrn takes pairs of bytes and narrows to single bytes (keeping high bits)
+  // Result: 4 bits per original byte position
+  uint8x8_t narrow0 = vshrn_n_u16(vreinterpretq_u16_u8(cmpSemi0), 4);
+  uint64_t mask0 = vget_lane_u64(vreinterpret_u64_u8(narrow0), 0);
 
   int semiPos;
-  bool bothInFirst16 = vmaxvq_u8(cmpSemi) && vmaxvq_u8(cmpNewline);
-
-  if (vmaxvq_u8(cmpSemi)) {
-    // Semicolon in first 16 bytes
-    semiPos = findChar(chunk, kSemicolonPattern);
-  } else {
-    // Fallback: semicolon not in first 16 bytes, start searching from p+16
-    const char* semi = p + 16;
-    while (*semi != ';') ++semi;
-    semiPos = static_cast<int>(semi - p);
-  }
-
-  // Create masked key
   Key32 maskedKey;
-  if (semiPos <= 31) {
-    maskedKey = loadMasked32(p, semiPos);
+
+  if (mask0) {
+    // Semicolon in first 16 bytes - find position via CLZ
+    // Each byte maps to 4 bits, so divide bit position by 4
+    semiPos = __builtin_ctzll(mask0) >> 2;
+
+    // Mask key from already-loaded chunk0 (semiPos < 16)
+    static const uint8x16_t kIndices = {0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15};
+    uint8x16_t lenVec = vdupq_n_u8(static_cast<uint8_t>(semiPos));
+    uint8x16_t mask = vcgtq_u8(lenVec, kIndices);
+    maskedKey.val[0] = vandq_u8(chunk0, mask);
+    maskedKey.val[1] = vdupq_n_u8(0);
   } else {
-    maskedKey = zeroKey32();  // Will use stationPtr instead
+    uint8x8_t narrow1 = vshrn_n_u16(vreinterpretq_u16_u8(cmpSemi1), 4);
+    uint64_t mask1 = vget_lane_u64(vreinterpret_u64_u8(narrow1), 0);
+
+    if (mask1) {
+      // Semicolon in second 16 bytes (positions 16-31)
+      semiPos = 16 + (__builtin_ctzll(mask1) >> 2);
+
+      // Mask key from both chunks
+      static const uint8x16_t kIndicesLo = {0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15};
+      static const uint8x16_t kIndicesHi = {16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31};
+      uint8x16_t lenVec = vdupq_n_u8(static_cast<uint8_t>(semiPos));
+      uint8x16_t maskLo = vcgtq_u8(lenVec, kIndicesLo);
+      uint8x16_t maskHi = vcgtq_u8(lenVec, kIndicesHi);
+      maskedKey.val[0] = vandq_u8(chunk0, maskLo);
+      maskedKey.val[1] = vandq_u8(chunk1, maskHi);
+    } else {
+      // Fallback: semicolon beyond 32 bytes
+      const char* semi = p + 32;
+      while (*semi != ';') ++semi;
+      semiPos = static_cast<int>(semi - p);
+      maskedKey = zeroKey32();  // Will use stationPtr instead
+    }
   }
 
   // Extract temperature data
   const char* temp = p + semiPos + 1;
   uint64_t tempData;
-
-  if (bothInFirst16) {
-    // Both delimiters in first 16 bytes - extract from loaded chunk
-    int tempOffset = semiPos + 1;
-    uint64_t chunkLo = vgetq_lane_u64(vreinterpretq_u64_u8(chunk), 0);
-    uint64_t chunkHi = vgetq_lane_u64(vreinterpretq_u64_u8(chunk), 1);
-
-    if (tempOffset < 8) {
-      tempData = chunkLo >> (tempOffset * 8);
-      if (tempOffset > 0) {
-        tempData |= (chunkHi << ((8 - tempOffset) * 8));
-      }
-    } else {
-      tempData = chunkHi >> ((tempOffset - 8) * 8);
-    }
-  } else {
-    std::memcpy(&tempData, temp, 8);
-  }
+  std::memcpy(&tempData, temp, 8);
 
   auto [value, bytesConsumed] = parseTemperature(tempData);
 
@@ -910,13 +898,19 @@ void processChunk(const char* roughStart, const char* roughEnd,
   maps.consolidate();
 }
 
-int main() {
+int main(int argc, char* argv[]) {
   using Clock = std::chrono::high_resolution_clock;
   auto totalStart = Clock::now();
 
-  // Get number of threads
-  unsigned int numThreads = std::thread::hardware_concurrency() - 1;
-  if (numThreads == 0) numThreads = 1;
+  // Get number of threads (from command line or default to hardware_concurrency - 1)
+  uint32_t numThreads;
+  if (argc > 1) {
+    numThreads = static_cast<uint32_t>(std::atoi(argv[1]));
+    if (numThreads == 0) numThreads = 1;
+  } else {
+    numThreads = std::thread::hardware_concurrency() - 1;
+    if (numThreads == 0) numThreads = 1;
+  }
 
 #if defined(DEBUG_PRINT)
   std::print("Using {} threads\n", numThreads);
@@ -944,8 +938,8 @@ int main() {
   const char* fileEnd = mmap.data() + mmap.size();
 
   // Calculate number of merge rounds: ceil(log2(numThreads))
-  unsigned int mergeRounds = 0;
-  for (unsigned int n = numThreads; n > 1; n = (n + 1) / 2) {
+  uint32_t mergeRounds = 0;
+  for (uint32_t n = numThreads; n > 1; n = (n + 1) / 2) {
     ++mergeRounds;
   }
 
@@ -954,7 +948,7 @@ int main() {
   // - roundComplete[r]: signals all threads have finished round r
   std::deque<std::barrier<>> barriers;
   barriers.emplace_back(numThreads);  // parseComplete
-  for (unsigned int r = 0; r < mergeRounds; ++r) {
+  for (uint32_t r = 0; r < mergeRounds; ++r) {
     barriers.emplace_back(numThreads);  // roundComplete[r]
   }
 
@@ -967,7 +961,7 @@ int main() {
   // Spawn worker threads - each thread creates its own Maps and participates in merge
   std::vector<std::thread> threads;
   threads.reserve(numThreads - 1);
-  for (unsigned int i = 1; i < numThreads; ++i) {
+  for (uint32_t i = 1; i < numThreads; ++i) {
     const char* chunkStart = mmap.data() + (i * chunkSize);
     const char* chunkEnd = (i == numThreads - 1) ? fileEnd : (mmap.data() + ((i + 1) * chunkSize));
 
@@ -980,9 +974,9 @@ int main() {
       barriers[0].arrive_and_wait();
 
       // Participate in log(n) merge rounds
-      for (unsigned int r = 0; r < mergeRounds; ++r) {
-        unsigned int step = 1u << r;  // 1, 2, 4, 8, ...
-        unsigned int stride = step * 2;  // 2, 4, 8, 16, ...
+      for (uint32_t r = 0; r < mergeRounds; ++r) {
+        uint32_t step = 1u << r;  // 1, 2, 4, 8, ...
+        uint32_t stride = step * 2;  // 2, 4, 8, 16, ...
 
         // Thread i merges from thread (i + step) if:
         // - i is divisible by stride
@@ -1013,8 +1007,8 @@ int main() {
   auto mergeStart = Clock::now();
 
   // Main thread participates in merge rounds
-  for (unsigned int r = 0; r < mergeRounds; ++r) {
-    unsigned int step = 1u << r;  // 1, 2, 4, 8, ...
+  for (uint32_t r = 0; r < mergeRounds; ++r) {
+    uint32_t step = 1u << r;  // 1, 2, 4, 8, ...
 
     // Thread 0 merges from thread step if step < numThreads
     if (step < numThreads) {
@@ -1072,7 +1066,7 @@ int main() {
 #if defined(DEBUG_PRINT)
   std::print("\n");
 #endif
-  std::print(stderr, "=== Timing Breakdown ===\n");
+  std::print(stderr, "=== Timing Breakdown ({} threads) ===\n", numThreads);
   std::print(stderr, "  mmap:   {:8.3f} ms\n", toMs(mmapEnd - mmapStart));
   std::print(stderr, "  parse:  {:8.3f} ms\n", toMs(parseEnd - parseStart));
   std::print(stderr, "  merge:  {:8.3f} ms\n", toMs(mergeEnd - mergeStart));
