@@ -506,74 +506,71 @@ inline ParseResult parseNext(const char* p) {
 }
 #elif defined(USE_NEON)
 inline ParseResult parseNext(const char* p) {
-  // Lambda to find character position using SWAR on 16-byte NEON register
-  auto findChar = [](uint8x16_t chunk, uint64_t targetPattern) -> int {
-    uint64_t chunkLo = vgetq_lane_u64(vreinterpretq_u64_u8(chunk), 0);
-    uint64_t chunkHi = vgetq_lane_u64(vreinterpretq_u64_u8(chunk), 1);
+  // Load 32 bytes upfront (two 16-byte vectors) - covers ~99% of lines
+  uint8x16_t chunk0 = vld1q_u8(reinterpret_cast<const uint8_t*>(p));
+  uint8x16_t chunk1 = vld1q_u8(reinterpret_cast<const uint8_t*>(p + 16));
 
-    uint64_t xorLo = chunkLo ^ targetPattern;
-    uint64_t hasLo = (xorLo - kSwarLow) & ~xorLo & kSwarHigh;
-
-    if (hasLo) {
-      return __builtin_ctzll(hasLo) >> 3;
-    }
-
-    uint64_t xorHi = chunkHi ^ targetPattern;
-    uint64_t hasHi = (xorHi - kSwarLow) & ~xorHi & kSwarHigh;
-    return 8 + (__builtin_ctzll(hasHi) >> 3);
-  };
-
-  // Load 16 bytes first (covers 60% of cases)
-  uint8x16_t chunk = vld1q_u8(reinterpret_cast<const uint8_t*>(p));
-
-  // Find semicolon and newline
+  // Find semicolon in both chunks
   uint8x16_t vsemi = vdupq_n_u8(';');
-  uint8x16_t vnewline = vdupq_n_u8('\n');
-  uint8x16_t cmpSemi = vceqq_u8(chunk, vsemi);
-  uint8x16_t cmpNewline = vceqq_u8(chunk, vnewline);
+  uint8x16_t cmpSemi0 = vceqq_u8(chunk0, vsemi);
+  uint8x16_t cmpSemi1 = vceqq_u8(chunk1, vsemi);
 
   int semiPos;
-  bool bothInFirst16 = vmaxvq_u8(cmpSemi) && vmaxvq_u8(cmpNewline);
+  Key32 maskedKey;
 
-  if (vmaxvq_u8(cmpSemi)) {
-    // Semicolon in first 16 bytes
-    semiPos = findChar(chunk, kSemicolonPattern);
+  // Check if semicolon is in first 16 bytes
+  if (vmaxvq_u8(cmpSemi0)) {
+    // Use SWAR to find exact position in first chunk
+    uint64_t lo = vgetq_lane_u64(vreinterpretq_u64_u8(chunk0), 0);
+    uint64_t hi = vgetq_lane_u64(vreinterpretq_u64_u8(chunk0), 1);
+    uint64_t xorLo = lo ^ kSemicolonPattern;
+    uint64_t hasLo = (xorLo - kSwarLow) & ~xorLo & kSwarHigh;
+    if (hasLo) {
+      semiPos = __builtin_ctzll(hasLo) >> 3;
+    } else {
+      uint64_t xorHi = hi ^ kSemicolonPattern;
+      uint64_t hasHi = (xorHi - kSwarLow) & ~xorHi & kSwarHigh;
+      semiPos = 8 + (__builtin_ctzll(hasHi) >> 3);
+    }
+    // Mask key from already-loaded chunk0 (semiPos < 16)
+    static const uint8x16_t kIndices = {0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15};
+    uint8x16_t lenVec = vdupq_n_u8(static_cast<uint8_t>(semiPos));
+    uint8x16_t mask = vcgtq_u8(lenVec, kIndices);
+    maskedKey.val[0] = vandq_u8(chunk0, mask);
+    maskedKey.val[1] = vdupq_n_u8(0);
+  } else if (vmaxvq_u8(cmpSemi1)) {
+    // Semicolon in second 16 bytes (positions 16-31)
+    uint64_t lo = vgetq_lane_u64(vreinterpretq_u64_u8(chunk1), 0);
+    uint64_t hi = vgetq_lane_u64(vreinterpretq_u64_u8(chunk1), 1);
+    uint64_t xorLo = lo ^ kSemicolonPattern;
+    uint64_t hasLo = (xorLo - kSwarLow) & ~xorLo & kSwarHigh;
+    if (hasLo) {
+      semiPos = 16 + (__builtin_ctzll(hasLo) >> 3);
+    } else {
+      uint64_t xorHi = hi ^ kSemicolonPattern;
+      uint64_t hasHi = (xorHi - kSwarLow) & ~xorHi & kSwarHigh;
+      semiPos = 24 + (__builtin_ctzll(hasHi) >> 3);
+    }
+    // Mask key from both chunks
+    static const uint8x16_t kIndicesLo = {0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15};
+    static const uint8x16_t kIndicesHi = {16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31};
+    uint8x16_t lenVec = vdupq_n_u8(static_cast<uint8_t>(semiPos));
+    uint8x16_t maskLo = vcgtq_u8(lenVec, kIndicesLo);
+    uint8x16_t maskHi = vcgtq_u8(lenVec, kIndicesHi);
+    maskedKey.val[0] = vandq_u8(chunk0, maskLo);
+    maskedKey.val[1] = vandq_u8(chunk1, maskHi);
   } else {
-    // Fallback: semicolon not in first 16 bytes, start searching from p+16
-    const char* semi = p + 16;
+    // Fallback: semicolon beyond 32 bytes
+    const char* semi = p + 32;
     while (*semi != ';') ++semi;
     semiPos = static_cast<int>(semi - p);
-  }
-
-  // Create masked key
-  Key32 maskedKey;
-  if (semiPos <= 31) {
-    maskedKey = loadMasked32(p, semiPos);
-  } else {
     maskedKey = zeroKey32();  // Will use stationPtr instead
   }
 
   // Extract temperature data
   const char* temp = p + semiPos + 1;
   uint64_t tempData;
-
-  if (bothInFirst16) {
-    // Both delimiters in first 16 bytes - extract from loaded chunk
-    int tempOffset = semiPos + 1;
-    uint64_t chunkLo = vgetq_lane_u64(vreinterpretq_u64_u8(chunk), 0);
-    uint64_t chunkHi = vgetq_lane_u64(vreinterpretq_u64_u8(chunk), 1);
-
-    if (tempOffset < 8) {
-      tempData = chunkLo >> (tempOffset * 8);
-      if (tempOffset > 0) {
-        tempData |= (chunkHi << ((8 - tempOffset) * 8));
-      }
-    } else {
-      tempData = chunkHi >> ((tempOffset - 8) * 8);
-    }
-  } else {
-    std::memcpy(&tempData, temp, 8);
-  }
+  std::memcpy(&tempData, temp, 8);
 
   auto [value, bytesConsumed] = parseTemperature(tempData);
 
