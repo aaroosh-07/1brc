@@ -133,23 +133,11 @@ hashmap processInput(const char* bufferStart, std::size_t size)
 
     while (curPointer < bufferEnd)
     {
-        // const char* cityStartPtr = curPointer;
-
-        // curPointer = static_cast<const char*>(memchr(curPointer, ';', bufferEnd - curPointer));
-
-        // std::string_view city(cityStartPtr, curPointer - cityStartPtr);
-
         std::string_view city = parse_city(curPointer, bufferEnd);
 
         // skip ; character
         curPointer++;
 
-        // const char* valueStartPtr = curPointer;
-
-        // curPointer = static_cast<const char*>(memchr(curPointer, '\n', bufferEnd - curPointer));
-
-        // float value;
-        // std::from_chars(valueStartPtr, curPointer, value);
         float value = parse_value(curPointer, bufferEnd);
         curPointer++;
 
@@ -166,30 +154,6 @@ hashmap processInput(const char* bufferStart, std::size_t size)
             record.maxValue = std::max(record.maxValue, value);
             record.minValue = std::min(record.minValue, value);
         }
-    }
-
-    return cityRecord;
-}
-
-hashmap processInput(std::ifstream& inputFile)
-{
-    hashmap cityRecord;
-    std::string city, value;
-    while(std::getline(inputFile, city, ';') && std::getline(inputFile, value, '\n'))
-    {
-        float data = std::stof(value);
-        auto itr = cityRecord.find(city);
-        if (itr == cityRecord.end())
-        {
-            cityRecord.emplace(city, Record{1, data, data, data});
-            continue;
-        }
-
-        Record& record = itr->second;
-        record.sum += data;
-        record.maxValue = std::max(record.maxValue, data);
-        record.minValue = std::min(record.minValue, data);
-        record.count++;
     }
 
     return cityRecord;
@@ -222,16 +186,6 @@ void processOutput(std::ostream& outputStream, hashmap& cityRecords)
     outputStream << "}\n";
 }
 
-void bruteForceSol()
-{
-    std::ifstream file("data/measurements.txt");
-    if (!file.is_open())
-        std::exit(1);
-
-    auto cityRecords = processInput(file);
-    processOutput(std::cout, cityRecords);
-}
-
 void improvedSolWithMmapFiles()
 {
     MemMapFile memMappedFile(std::filesystem::path("data/measurements.txt"));
@@ -241,9 +195,6 @@ void improvedSolWithMmapFiles()
 
 int main()
 {
-    // Call this fn for BruteForce sol
-    // bruteForceSol();
-
     // Improved Implementation with Mem Mapped files only
     improvedSolWithMmapFiles();
 
