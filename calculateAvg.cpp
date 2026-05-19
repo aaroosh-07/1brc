@@ -12,6 +12,7 @@
 #include<sys/stat.h>
 #include<sys/types.h>
 #include<charconv>
+#include<cstring>
 
 class FileDes
 {
@@ -103,6 +104,26 @@ struct StringHash
 
 using hashmap = std::unordered_map<std::string, Record, StringHash, std::equal_to<>>;
 
+std::string_view parse_city(const char*& curPointer, const char* bufferEnd)
+{
+    const char* cityStartPtr = curPointer;
+
+    curPointer = static_cast<const char*>(memchr(curPointer, ';', bufferEnd - curPointer));
+
+    return std::string_view(cityStartPtr, curPointer - cityStartPtr);
+}
+
+float parse_value(const char*& curPointer, const char* bufferEnd)
+{
+    const char* valueStartPtr = curPointer;
+
+    curPointer = static_cast<const char*>(memchr(curPointer, '\n', bufferEnd - curPointer));
+
+    float value;
+    std::from_chars(valueStartPtr, curPointer, value);
+    return value;
+}
+
 hashmap processInput(const char* bufferStart, std::size_t size)
 {
     hashmap cityRecord;
@@ -112,25 +133,24 @@ hashmap processInput(const char* bufferStart, std::size_t size)
 
     while (curPointer < bufferEnd)
     {
-        const char* cityStartPtr = curPointer;
-        while (*curPointer != ';')
-        {
-            curPointer++;
-        }
+        // const char* cityStartPtr = curPointer;
 
-        std::string_view city(cityStartPtr, curPointer - cityStartPtr);
+        // curPointer = static_cast<const char*>(memchr(curPointer, ';', bufferEnd - curPointer));
+
+        // std::string_view city(cityStartPtr, curPointer - cityStartPtr);
+
+        std::string_view city = parse_city(curPointer, bufferEnd);
 
         // skip ; character
         curPointer++;
 
-        const char* valueStartPtr = curPointer;
-        while (*curPointer != '\n')
-        {
-            curPointer++;
-        }
+        // const char* valueStartPtr = curPointer;
 
-        float value;
-        std::from_chars(valueStartPtr, curPointer, value);
+        // curPointer = static_cast<const char*>(memchr(curPointer, '\n', bufferEnd - curPointer));
+
+        // float value;
+        // std::from_chars(valueStartPtr, curPointer, value);
+        float value = parse_value(curPointer, bufferEnd);
         curPointer++;
 
         auto itr = cityRecord.find(city);
@@ -222,10 +242,10 @@ void improvedSolWithMmapFiles()
 int main()
 {
     // Call this fn for BruteForce sol
-    bruteForceSol();
+    // bruteForceSol();
 
     // Improved Implementation with Mem Mapped files only
-    // improvedSolWithMmapFiles();
+    improvedSolWithMmapFiles();
 
     return 0;
 }
