@@ -14,6 +14,9 @@
 #include<charconv>
 #include<cstring>
 
+#define DEBUG_INPUT 0
+#define DEBUG_OUTPUT 0
+
 class FileDes
 {
     int fileFd = -1;
@@ -81,10 +84,10 @@ public:
 
 struct Record
 {
-    uint64_t count = 0;
-    double sum = 0.0;
-    float maxValue = 0.0;
-    float minValue = 0.0;
+    int64_t count = 0;
+    int64_t sum = 0;
+    int16_t maxValue = 0;
+    int16_t minValue = 0;
 };
 
 struct StringHash
@@ -113,14 +116,26 @@ std::string_view parse_city(const char*& curPointer, const char* bufferEnd)
     return std::string_view(cityStartPtr, curPointer - cityStartPtr);
 }
 
-float parse_value(const char*& curPointer, const char* bufferEnd)
+int16_t parse_value(const char*& curPointer)
 {
-    const char* valueStartPtr = curPointer;
+    bool negative = (*curPointer == '-');
+    if (negative)
+        curPointer++;
 
-    curPointer = static_cast<const char*>(memchr(curPointer, '\n', bufferEnd - curPointer));
+    int16_t value = 0;
+    while (*curPointer != '\n')
+    {
+        if (*curPointer != '.')
+        {
+            value *= 10;
+            value += *curPointer - '0';
+        }
+        curPointer++;
+    }
 
-    float value;
-    std::from_chars(valueStartPtr, curPointer, value);
+    if (negative)
+        value *= -1;
+
     return value;
 }
 
@@ -138,12 +153,15 @@ hashmap processInput(const char* bufferStart, std::size_t size)
         // skip ; character
         curPointer++;
 
-        float value = parse_value(curPointer, bufferEnd);
+        int16_t value = parse_value(curPointer);
         curPointer++;
 
         auto itr = cityRecord.find(city);
         if (itr == cityRecord.end())
         {
+#if DEBUG_INPUT
+            std::cout<<"insert new record "<<value<<" "<<" city: "<<city<<std::endl;
+#endif
             cityRecord.emplace(city, Record{1, value, value, value});
         }
         else
@@ -153,6 +171,9 @@ hashmap processInput(const char* bufferStart, std::size_t size)
             record.sum += value;
             record.maxValue = std::max(record.maxValue, value);
             record.minValue = std::min(record.minValue, value);
+#if DEBUG_INPUT
+            std::cout<<"update curValue: "<<value<<" c: "<<record.count<<" s: "<<record.sum<<" max: "<<record.maxValue<<" min: "<<record.minValue<<std::endl;
+#endif
         }
     }
 
@@ -180,8 +201,11 @@ void processOutput(std::ostream& outputStream, hashmap& cityRecords)
     for (std::string& city: cities)
     {
         Record& metrics = cityRecords[city];
+#if DEBUG_OUTPUT
+        std::cout<<"rec city: "<<city<<" sum: "<<metrics.sum<<std::endl;
+#endif
         outputStream << std::exchange(delim, ", ") << city << "="
-                    << metrics.minValue << "/" << metrics.sum / metrics.count <<"/"<< metrics.maxValue;
+                    << metrics.minValue / 10.0 << "/" << (metrics.sum / metrics.count) / 10.0 <<"/"<< metrics.maxValue / 10.0;
     }
     outputStream << "}\n";
 }
