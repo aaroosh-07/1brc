@@ -205,7 +205,7 @@ void processOutput(std::ostream& outputStream, hashmap& cityRecords)
         std::cout<<"rec city: "<<city<<" sum: "<<metrics.sum<<std::endl;
 #endif
         outputStream << std::exchange(delim, ", ") << city << "="
-                    << metrics.minValue / 10.0 << "/" << (metrics.sum / metrics.count) / 10.0 <<"/"<< metrics.maxValue / 10.0;
+                    << metrics.minValue / 10.0 << "/" << (static_cast<double>(metrics.sum) / 10.0 )/ metrics.count <<"/"<< metrics.maxValue / 10.0;
     }
     outputStream << "}\n";
 }

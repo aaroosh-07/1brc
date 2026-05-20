@@ -12,7 +12,10 @@ The output is a sorted list of stations with their min/mean/max temperatures.
 ## Performance Results
 base line implementation 4 min 0.6 sec
 With Memory Mapped Files 3 min 14 sec
-Removing std::fromchars  2 min 55 sec
+Removing std::fromchars  2 min 55 sec without integer rounding 2 min 56 sec
+
+## Possible approaches
+Huge pages
 
 ## Implementation Details
 
