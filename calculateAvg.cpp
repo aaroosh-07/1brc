@@ -1,7 +1,6 @@
 #include<iostream>
 #include<fstream>
 #include<sstream>
-#include<unordered_map>
 #include<vector>
 #include<algorithm>
 #include<iomanip>
@@ -11,11 +10,10 @@
 #include<unistd.h>
 #include<sys/stat.h>
 #include<sys/types.h>
-#include<charconv>
 #include<cstring>
+#include<functional>
 
 #define DEBUG_INPUT 0
-#define DEBUG_OUTPUT 0
 
 class FileDes
 {
@@ -105,7 +103,73 @@ struct StringHash
     }
 };
 
-using hashmap = std::unordered_map<std::string, Record, StringHash, std::equal_to<>>;
+struct hashmap
+{
+    std::array<std::string, UINT16_MAX + 1> m_keys;
+    std::array<Record, UINT16_MAX + 1> m_values;
+    std::vector<size_t> filledSlots;
+
+    // Look for the slot in which key is stored or will be stored
+    // implemented this way because after a key insertion
+    // the slot for inserting the next key may change if collision happens
+    uint16_t lookupSlot(std::string_view key)
+    {
+        uint16_t index = std::hash<std::string_view>{}(key);
+
+        while (!m_keys[index].empty())
+        {
+            if (m_keys[index] == key)
+                return index;
+            index++;
+        }
+
+        return index;
+    }
+
+    void insert(std::string_view key, int16_t value)
+    {
+        uint16_t slot = lookupSlot(key);
+
+        // if slot empty
+        // key does not exist
+        if (m_keys[slot].empty())
+        {
+            m_keys[slot] = key;
+            m_values[slot] = Record{1, value, value, value};
+            filledSlots.push_back(slot);
+#if DEBUG_INPUT
+            std::cout<<"insert new record "<<value<<" "<<" city: "<<key<<std::endl;
+#endif
+        }
+        else
+        {
+            //Key already exist
+            Record& record = m_values[slot];
+            record.count++;
+            record.sum += value;
+            if (record.maxValue < value)
+            {
+                record.maxValue = value;
+            }
+            else if (record.minValue > value)
+            {
+                record.minValue = value;
+            }
+#if DEBUG_INPUT
+            std::cout<<"update curValue: "<<value<<" c: "<<record.count<<" s: "<<record.sum<<" max: "<<record.maxValue<<" min: "<<record.minValue<<std::endl;
+#endif
+        }
+    }
+
+    void sort_slots()
+    {
+        auto cmp = [this](size_t left, size_t right) {
+            return m_keys[left] < m_keys[right];
+        };
+
+        sort(filledSlots.begin(), filledSlots.end(), cmp);
+    }
+};
 
 std::string_view parse_city(const char*& curPointer, const char* bufferEnd)
 {
@@ -156,25 +220,7 @@ hashmap processInput(const char* bufferStart, std::size_t size)
         int16_t value = parse_value(curPointer);
         curPointer++;
 
-        auto itr = cityRecord.find(city);
-        if (itr == cityRecord.end())
-        {
-#if DEBUG_INPUT
-            std::cout<<"insert new record "<<value<<" "<<" city: "<<city<<std::endl;
-#endif
-            cityRecord.emplace(city, Record{1, value, value, value});
-        }
-        else
-        {
-            Record& record = itr->second;
-            record.count++;
-            record.sum += value;
-            record.maxValue = std::max(record.maxValue, value);
-            record.minValue = std::min(record.minValue, value);
-#if DEBUG_INPUT
-            std::cout<<"update curValue: "<<value<<" c: "<<record.count<<" s: "<<record.sum<<" max: "<<record.maxValue<<" min: "<<record.minValue<<std::endl;
-#endif
-        }
+        cityRecord.insert(city, value);
     }
 
     return cityRecord;
@@ -182,15 +228,7 @@ hashmap processInput(const char* bufferStart, std::size_t size)
 
 void processOutput(std::ostream& outputStream, hashmap& cityRecords)
 {
-    std::vector<std::string> cities;
-    cities.reserve(cityRecords.size());
-
-    for (const auto& pair : cityRecords)
-    {
-        cities.push_back(pair.first);
-    }
-
-    std::sort(cities.begin(), cities.end());
+    cityRecords.sort_slots();
     std::string delim = "";
 
     outputStream << std::fixed
@@ -198,13 +236,11 @@ void processOutput(std::ostream& outputStream, hashmap& cityRecords)
                  << std::setprecision(1);
 
     outputStream << '{';
-    for (std::string& city: cities)
+
+    for (size_t& slot: cityRecords.filledSlots)
     {
-        Record& metrics = cityRecords[city];
-#if DEBUG_OUTPUT
-        std::cout<<"rec city: "<<city<<" sum: "<<metrics.sum<<std::endl;
-#endif
-        outputStream << std::exchange(delim, ", ") << city << "="
+        const Record& metrics = cityRecords.m_values[slot];
+        outputStream << std::exchange(delim, ", ") << cityRecords.m_keys[slot] << "="
                     << metrics.minValue / 10.0 << "/" << (static_cast<double>(metrics.sum) / 10.0 )/ metrics.count <<"/"<< metrics.maxValue / 10.0;
     }
     outputStream << "}\n";
